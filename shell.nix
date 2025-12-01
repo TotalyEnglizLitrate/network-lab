@@ -12,7 +12,7 @@ in
       llvmPackages_latest.bintools
       rustup
 
-      nodejs_latest
+      nodejs_22
       pnpm
     ];
 
