@@ -1,10 +1,15 @@
 mod models;
+mod routes;
 
-use std::{collections::HashMap, env};
+use std::{collections::HashMap, env, sync::Arc};
 
 use sqlx::migrate::Migrator;
 use thiserror::Error;
 use tracing::{debug, error, info, instrument};
+use tracing_subscriber::filter::LevelFilter;
+
+use models::AppState;
+use routes::create_router;
 
 static MIGRATOR: Migrator = sqlx::migrate!();
 
@@ -40,31 +45,56 @@ fn load_env(file: &str, variables: &[&str]) -> Result<HashMap<String, String>, S
     Ok(variables_map)
 }
 
+fn load_envs(envs: &[(&str, &[&str])]) -> Result<HashMap<String, String>, SetupError> {
+    let mut result = HashMap::new();
+    for (file, variables) in envs {
+        result.extend(load_env(file, variables)?);
+    }
+    Ok(result)
+}
+
+fn parse_log_level(args: &mut env::Args) -> LevelFilter {
+    while let Some(arg) = args.next() {
+        if arg == "--log-level" {
+            return if let Some(level) = args.next() {
+                match level.to_lowercase().as_str() {
+                    "debug" => LevelFilter::DEBUG,
+                    "info" => LevelFilter::INFO,
+                    "warn" | "warning" => LevelFilter::WARN,
+                    "error" => LevelFilter::ERROR,
+                    _ => LevelFilter::INFO,
+                }
+            } else {
+                LevelFilter::INFO
+            };
+        }
+    }
+
+    LevelFilter::INFO
+}
+
 #[tokio::main]
 #[instrument]
 async fn main() {
-    tracing_subscriber::fmt::init();
+    let log_level = parse_log_level(&mut env::args());
+    tracing_subscriber::fmt().with_max_level(log_level).init();
 
     debug!("Loading environment variables.");
 
-    let db_env = match load_env(
-        ".env.database",
-        &[
-            "POSTGRES_USER",
-            "POSTGRES_PASSWORD",
-            "POSTGRES_DB",
-            "POSTGRES_PORT",
-            "POSTGRES_HOST",
-        ],
-    ) {
-        Ok(env) => env,
-        Err(e) => {
-            error!("{e}");
-            return;
-        }
-    };
-
-    let qemu_env = match load_env(".env.qemu", &["IMAGE_DIR", "OVERLAY_DIR"]) {
+    let env = match load_envs(&[
+        (
+            ".env.database",
+            &[
+                "POSTGRES_USER",
+                "POSTGRES_PASSWORD",
+                "POSTGRES_DB",
+                "POSTGRES_PORT",
+                "POSTGRES_HOST",
+            ],
+        ),
+        (".env.qemu", &["IMAGE_DIR", "OVERLAY_DIR"]),
+        (".env", &["BACKEND_HOST", "BACKEND_PORT"]),
+    ]) {
         Ok(env) => env,
         Err(e) => {
             error!("{e}");
@@ -76,17 +106,17 @@ async fn main() {
 
     let database_url = format!(
         "postgres://{}:{}@{}:{}/{}",
-        db_env.get("POSTGRES_USER").unwrap(),
-        db_env.get("POSTGRES_PASSWORD").unwrap(),
-        db_env.get("POSTGRES_HOST").unwrap(),
-        db_env.get("POSTGRES_PORT").unwrap(),
-        db_env.get("POSTGRES_DB").unwrap()
+        env.get("POSTGRES_USER").unwrap(),
+        env.get("POSTGRES_PASSWORD").unwrap(),
+        env.get("POSTGRES_HOST").unwrap(),
+        env.get("POSTGRES_PORT").unwrap(),
+        env.get("POSTGRES_DB").unwrap()
     );
 
     debug!(
         "Connecting to the database at {}:{}",
-        db_env.get("POSTGRES_HOST").unwrap(),
-        db_env.get("POSTGRES_PORT").unwrap()
+        env.get("POSTGRES_HOST").unwrap(),
+        env.get("POSTGRES_PORT").unwrap()
     );
 
     let pool = match sqlx::postgres::PgPoolOptions::new()
@@ -111,4 +141,30 @@ async fn main() {
 
     info!("Migrations applied successfully.");
     info!("Database setup complete.");
+
+    let address = format!(
+        "{}:{}",
+        env.get("BACKEND_HOST").unwrap(),
+        env.get("BACKEND_PORT").unwrap()
+    );
+
+    let listener = match tokio::net::TcpListener::bind(&address).await {
+        Ok(listener) => {
+            info!("Listening on {address}");
+            listener
+        }
+        Err(err) => {
+            error!("Failed to bind listener to {address}: {err}");
+            return;
+        }
+    };
+
+    let app = create_router(AppState {
+        db: pool,
+        env: Arc::new(env),
+    });
+
+    if let Err(err) = axum::serve(listener, app).await {
+        error!("Server error: {err}");
+    }
 }
