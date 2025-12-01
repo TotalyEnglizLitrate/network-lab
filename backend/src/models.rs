@@ -21,7 +21,7 @@ pub enum NodeStatus {
 }
 #[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
 pub struct Node {
-    pub id: uuid::Uuid,
+    pub id: Option<Uuid>,
     pub name: String,
     pub status: NodeStatus,
     pub image_path: String,
@@ -48,10 +48,10 @@ impl Node {
 
 #[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
 pub struct User {
-    pub id: Uuid,
+    pub id: Option<Uuid>,
     pub username: String,
     pub email: String,
-    pub hashed_password: String,
+    pub password_hash: String,
 }
 
 fn validate_and_resolve_path(
