@@ -3,6 +3,7 @@
     overrides = (builtins.fromTOML (builtins.readFile ./rust-toolchain.toml));
     libPath = with pkgs; lib.makeLibraryPath [
       # load external libraries that you need in your rust project here
+      libpq
     ];
 in
   pkgs.mkShell rec {
