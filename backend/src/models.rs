@@ -71,10 +71,13 @@ fn validate_and_resolve_path(
     };
 
     // Ensure the resolved path is within the base directory (to prevent directory traversal attacks)
-    if !full_path.starts_with(Path::new(&base_dir)) {
+    if !full_path.starts_with(&base_dir) {
         Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            format!("Unauthorized: {}", relative_path),
+            format!(
+                "Path traversal detected: {} is outside the allowed directory",
+                relative_path
+            ),
         ))?;
     }
 
