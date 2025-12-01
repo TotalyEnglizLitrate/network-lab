@@ -1,14 +1,14 @@
 use std::{
+    collections::HashMap,
     io,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
+use sqlx::{FromRow, PgPool};
 use thiserror::Error;
 use uuid::Uuid;
-
-use crate::Environment;
 
 #[derive(Debug, Error)]
 pub enum NodePathError {
@@ -34,16 +34,16 @@ pub struct Node {
 }
 
 impl Node {
-    pub fn get_image_path(&self, env: &Environment) -> Result<PathBuf, NodePathError> {
+    pub fn get_image_path(&self, app_state: &AppState) -> Result<PathBuf, NodePathError> {
         let full_path =
-            validate_and_resolve_path(env.variables.get("IMAGE_DIR").unwrap(), &self.image_path)?;
+            validate_and_resolve_path(app_state.env.get("IMAGE_DIR").unwrap(), &self.image_path)?;
         Ok(full_path)
     }
 
-    pub fn get_overlay_path(&self, env: &Environment) -> Result<Option<PathBuf>, NodePathError> {
+    pub fn get_overlay_path(&self, app_state: &AppState) -> Result<Option<PathBuf>, NodePathError> {
         if let Some(overlay_path) = &self.overlay_path {
             let full_path =
-                validate_and_resolve_path(env.variables.get("OVERLAY_DIR").unwrap(), overlay_path)?;
+                validate_and_resolve_path(app_state.env.get("OVERLAY_DIR").unwrap(), overlay_path)?;
             Ok(Some(full_path))
         } else {
             Ok(None)
@@ -71,4 +71,41 @@ fn validate_and_resolve_path(
     }
 
     Ok(full_path)
+}
+
+#[derive(Clone)]
+pub struct AppState {
+    pub db: PgPool,
+    pub env: Arc<HashMap<String, String>>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ApiResponse<T> {
+    pub success: bool,
+    pub data: Option<T>,
+    pub error: Option<String>,
+}
+
+impl<T: Serialize> ApiResponse<T> {
+    pub fn ok(data: T) -> Self {
+        Self {
+            success: true,
+            data: Some(data),
+            error: None,
+        }
+    }
+
+    pub fn error(message: String) -> ApiResponse<()> {
+        ApiResponse {
+            success: false,
+            data: None,
+            error: Some(message),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateNodeRequest {
+    pub name: String,
+    pub image_path: String,
 }
