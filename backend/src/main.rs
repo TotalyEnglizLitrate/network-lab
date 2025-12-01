@@ -1,6 +1,6 @@
 mod models;
 
-use std::env;
+use std::{collections::HashMap, env};
 
 use sqlx::migrate::Migrator;
 use thiserror::Error;
@@ -10,37 +10,34 @@ static MIGRATOR: Migrator = sqlx::migrate!();
 
 #[derive(Debug, Error)]
 enum SetupError {
-    #[error("Failed to load environment file: {0}")]
-    EnvLoadError(#[from] dotenv::Error),
+    #[error("Failed to load environment file {0}: {1}")]
+    EnvLoadError(String, String),
 
     #[error("Expected variable not found in environment file: {0}")]
-    EnvVarNotFound(#[from] env::VarError),
+    EnvVarNotFound(String),
 }
 
-struct Environment {
-    path: String,
-    variables: Vec<String>,
-}
+fn load_env(file: &str, variables: &[&str]) -> Result<HashMap<String, String>, SetupError> {
+    let mut variables_map = HashMap::new();
 
-impl Environment {
-    fn new(path: &str, variables: &[&str]) -> Self {
-        Self {
-            path: path.into(),
-            variables: variables.iter().map(|&x| x.into()).collect(),
-        }
+    debug!("Loading environment variables from file: {}", file);
+    match dotenv::from_filename(file) {
+        Ok(_) => debug!("Successfully loaded environment file: {}", file),
+        Err(e) => return Err(SetupError::EnvLoadError(file.into(), e.to_string())),
     }
 
-    fn load(&self) -> Result<(), SetupError> {
-        debug!("Loading environment variables from file: {}", &self.path);
-        dotenv::from_filename(&self.path)?;
-
-        for var in &self.variables {
-            env::var(var)?;
-            debug!("Loaded environment variable {}", &var);
-        }
-
-        Ok(())
+    for &var in variables {
+        variables_map.insert(
+            var.into(),
+            match env::var(var) {
+                Ok(value) => value,
+                Err(_) => return Err(SetupError::EnvVarNotFound(var.into())),
+            },
+        );
+        debug!("Loaded environment variable {}", &var);
     }
+
+    Ok(variables_map)
 }
 
 #[tokio::main]
@@ -48,29 +45,49 @@ impl Environment {
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    let envs = [
-        Environment::new(
-            ".env.database",
-            &[
-                "POSTGRES_USER",
-                "POSTGRES_PASSWORD",
-                "POSTGRES_DB",
-                "DATABASE_URL",
-            ],
-        ),
-        Environment::new(".env.qemu", &["IMAGE_DIR", "OVERLAY_DIR"]),
-    ];
-
     debug!("Loading environment variables.");
-    for env in envs {
-        if let Err(e) = env.load() {
+
+    let db_env = match load_env(
+        ".env.database",
+        &[
+            "POSTGRES_USER",
+            "POSTGRES_PASSWORD",
+            "POSTGRES_DB",
+            "POSTGRES_PORT",
+            "POSTGRES_HOST",
+        ],
+    ) {
+        Ok(env) => env,
+        Err(e) => {
             error!("{e}");
             return;
         }
-    }
+    };
+
+    let qemu_env = match load_env(".env.qemu", &["IMAGE_DIR", "OVERLAY_DIR"]) {
+        Ok(env) => env,
+        Err(e) => {
+            error!("{e}");
+            return;
+        }
+    };
+
     debug!("Loaded environment variables.");
 
-    let database_url = std::env::var("DATABASE_URL").unwrap();
+    let database_url = format!(
+        "postgres://{}:{}@{}:{}/{}",
+        db_env.get("POSTGRES_USER").unwrap(),
+        db_env.get("POSTGRES_PASSWORD").unwrap(),
+        db_env.get("POSTGRES_HOST").unwrap(),
+        db_env.get("POSTGRES_PORT").unwrap(),
+        db_env.get("POSTGRES_DB").unwrap()
+    );
+
+    debug!(
+        "Connecting to the database at {}:{}",
+        db_env.get("POSTGRES_HOST").unwrap(),
+        db_env.get("POSTGRES_PORT").unwrap()
+    );
 
     let pool = match sqlx::postgres::PgPoolOptions::new()
         .max_connections(5)

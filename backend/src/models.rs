@@ -1,5 +1,5 @@
 use std::{
-    env, io,
+    io,
     path::{Path, PathBuf},
 };
 
@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use thiserror::Error;
 use uuid::Uuid;
+
+use crate::Environment;
 
 #[derive(Debug, Error)]
 pub enum NodePathError {
@@ -32,14 +34,16 @@ pub struct Node {
 }
 
 impl Node {
-    pub fn get_image_path(&self) -> Result<PathBuf, NodePathError> {
-        let full_path = validate_and_resolve_path("IMAGE_DIR", &self.image_path)?;
+    pub fn get_image_path(&self, env: &Environment) -> Result<PathBuf, NodePathError> {
+        let full_path =
+            validate_and_resolve_path(env.variables.get("IMAGE_DIR").unwrap(), &self.image_path)?;
         Ok(full_path)
     }
 
-    pub fn get_overlay_path(&self) -> Result<Option<PathBuf>, NodePathError> {
+    pub fn get_overlay_path(&self, env: &Environment) -> Result<Option<PathBuf>, NodePathError> {
         if let Some(overlay_path) = &self.overlay_path {
-            let full_path = validate_and_resolve_path("OVERLAY_DIR", overlay_path)?;
+            let full_path =
+                validate_and_resolve_path(env.variables.get("OVERLAY_DIR").unwrap(), overlay_path)?;
             Ok(Some(full_path))
         } else {
             Ok(None)
@@ -56,19 +60,12 @@ pub struct User {
 }
 
 fn validate_and_resolve_path(
-    base_dir_env: &str,
+    base_dir: &str,
     relative_path: &str,
 ) -> Result<PathBuf, NodePathError> {
-    // Unreachable unwrap panic - we ensure env vars are all loaded on startup
-    let base_dir = Path::new(&env::var(base_dir_env).unwrap()).canonicalize()?;
+    let base_dir = Path::new(base_dir).canonicalize()?;
 
-    let full_path = match base_dir.join(relative_path).canonicalize() {
-        Ok(path) => path,
-        Err(_) => Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("Path does not exist: {}", relative_path),
-        ))?,
-    };
+    let full_path = base_dir.join(relative_path).canonicalize()?;
 
     // Ensure the resolved path is within the base directory (to prevent directory traversal attacks)
     if !full_path.starts_with(&base_dir) {
