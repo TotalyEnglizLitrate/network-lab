@@ -14,7 +14,8 @@ pub enum NodePathError {
     InvalidPath(#[from] io::Error),
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, sqlx::Type)]
+#[sqlx(type_name = "text", rename_all = "PascalCase")]
 pub enum NodeStatus {
     Running,
     Stopped,
