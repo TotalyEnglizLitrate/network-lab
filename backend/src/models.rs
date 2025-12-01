@@ -32,14 +32,14 @@ pub struct Node {
 }
 
 impl Node {
-    fn get_image_path(&self) -> Result<PathBuf, NodePathError> {
-        let full_path = validate_and_resolve_path("IMAGE_BASE_DIR", &self.image_path)?;
+    pub fn get_image_path(&self) -> Result<PathBuf, NodePathError> {
+        let full_path = validate_and_resolve_path("IMAGE_DIR", &self.image_path)?;
         Ok(full_path)
     }
 
-    fn get_overlay_path(&self) -> Result<Option<PathBuf>, NodePathError> {
+    pub fn get_overlay_path(&self) -> Result<Option<PathBuf>, NodePathError> {
         if let Some(overlay_path) = &self.overlay_path {
-            let full_path = validate_and_resolve_path("OVERLAY_BASE_DIR", overlay_path)?;
+            let full_path = validate_and_resolve_path("OVERLAY_DIR", overlay_path)?;
             Ok(Some(full_path))
         } else {
             Ok(None)
@@ -59,17 +59,22 @@ fn validate_and_resolve_path(
     base_dir_env: &str,
     relative_path: &str,
 ) -> Result<PathBuf, NodePathError> {
-    let base_dir = env::var(base_dir_env)
-        .map_err(|_| "Unreachable: We checked this at startup")
-        .unwrap();
+    // Unreachable unwrap panic - we ensure env vars are all loaded on startup
+    let base_dir = Path::new(&env::var(base_dir_env).unwrap()).canonicalize()?;
 
-    let full_path = Path::new(&base_dir).join(relative_path).canonicalize()?;
-
-    // Ensure the resolved path is within the base directory (to prevent directory traversal attacks)
-    if !full_path.starts_with(Path::new(&base_dir)) || !full_path.exists() {
-        Err(io::Error::new(
+    let full_path = match base_dir.join(relative_path).canonicalize() {
+        Ok(path) => path,
+        Err(_) => Err(io::Error::new(
             io::ErrorKind::NotFound,
             format!("Path does not exist: {}", relative_path),
+        ))?,
+    };
+
+    // Ensure the resolved path is within the base directory (to prevent directory traversal attacks)
+    if !full_path.starts_with(Path::new(&base_dir)) {
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("Unauthorized: {}", relative_path),
         ))?;
     }
 
