@@ -4,7 +4,7 @@ use std::env;
 
 use sqlx::migrate::Migrator;
 use thiserror::Error;
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{debug, error, info, instrument};
 
 static MIGRATOR: Migrator = sqlx::migrate!();
 
