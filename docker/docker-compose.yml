@@ -1,0 +1,14 @@
+
+services:
+  database:
+    image: postgres:18
+    container_name: network-lab-postgres
+    env_file:
+      - ${ENV_FILE:-../env.database}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
