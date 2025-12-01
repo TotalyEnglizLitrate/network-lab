@@ -35,7 +35,8 @@ impl Environment {
         dotenv::from_filename(&self.path)?;
 
         for var in &self.variables {
-            debug!("Loaded environment variable {}={}", &var, env::var(var)?);
+            env::var(var)?;
+            debug!("Loaded environment variable {}", &var);
         }
 
         Ok(())
