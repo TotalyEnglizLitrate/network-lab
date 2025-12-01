@@ -51,14 +51,6 @@ impl Node {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
-pub struct User {
-    pub id: Option<Uuid>,
-    pub username: String,
-    pub email: String,
-    pub password_hash: String,
-}
-
 fn validate_and_resolve_path(
     base_dir: &str,
     relative_path: &str,
