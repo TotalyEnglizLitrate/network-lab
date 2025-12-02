@@ -164,7 +164,7 @@ async fn main() {
     debug!("Loaded environment variables.");
 
     if let Err(err) = GuacamoleBootstrap::from_env(&env) {
-        error!("Failed to configure Guacamole UI: {}", err);
+        error!("Failed to validate Guacamole configuration: {}", err);
         return;
     }
 
