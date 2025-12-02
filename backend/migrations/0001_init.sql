@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS nodes (
     status TEXT NOT NULL CHECK (status IN ('Running', 'Stopped')) DEFAULT 'Stopped',
     image_id UUID NOT NULL REFERENCES images(id) ON DELETE RESTRICT,
     instance_overlay_path TEXT NOT NULL UNIQUE,
-    vnc_port INTEGER,
+    vnc_port SMALLINT CHECK (vnc_port >= 0 AND vnc_port <= 65535),
     guacamole_connection_id TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
