@@ -51,7 +51,7 @@ fn read_env(name: &str) -> Option<String> {
             if trimmed.is_empty() {
                 None
             } else {
-                trace!("Loaded environment variable: {trimmed}");
+                trace!("Loaded environment variable: {}", name);
                 Some(trimmed)
             }
         }
