@@ -101,78 +101,45 @@ impl GuacamoleConnection {
         // Get VNC connection info from the QEMU instance
         let (vnc_host, vnc_port) = qemu::get_vnc_info(instance)?;
 
-        // Build Guacamole URLs and identifiers
-        let base_http_url = env.get("GUAC_URL").unwrap().trim().trim_end_matches('/');
-        let tunnel_path = env
-            .get("GUAC_TUNNEL_PATH")
-            .unwrap()
-            .trim()
-            .trim_matches('/');
-        let api_path = env.get("GUAC_API_PATH").unwrap().trim().trim_matches('/');
-        let connection_prefix = sanitize_identifier(env.get("GUAC_CONNECTION_PREFIX").unwrap());
-        let username = env.get("GUAC_ADMIN_USER").unwrap();
-        let password = env.get("GUAC_ADMIN_PASS").unwrap();
-
-        let connection_key = sanitize_identifier(connection_name);
-
-        let client_identifier = format!("{}-{}", connection_prefix, connection_key);
-        let api_url = format!("{}/{}", base_http_url, api_path);
-        let tunnel_url = format!("{}/{}", base_http_url, tunnel_path);
-        let websocket_url = compute_websocket_url(base_http_url, tunnel_path);
+        // Load env and build URL/identifier data
+        let env_cfg = Self::build_env_config(env, connection_name);
 
         let client = Client::new();
 
         // Authenticate with Guacamole
-        let auth_response: AuthResponse = client
-            .post(format!("{}/tokens", api_url))
-            .form(&[("username", username), ("password", password)])
-            .send()
-            .await?
-            .error_for_status()
-            .map_err(|_| GuacamoleError::AuthFailed)?
-            .json()
-            .await?;
+        let auth_response = Self::authenticate(
+            &client,
+            &env_cfg.api_url,
+            &env_cfg.username,
+            &env_cfg.password,
+        )
+        .await?;
 
         // Create VNC connection in Guacamole
-        let create_request = CreateConnectionRequest {
-            name: connection_name.to_string(),
-            parent_identifier: "ROOT".into(),
-            protocol: "vnc".into(),
-            parameters: ConnectionParameters {
-                hostname: vnc_host,
-                port: vnc_port.to_string(),
-            },
-            attributes: ConnectionAttributes {
-                max_connections: "".to_string(),
-                max_connections_per_user: "".to_string(),
-            },
-        };
+        let create_response = Self::create_connection(
+            &client,
+            &env_cfg.api_url,
+            &auth_response,
+            connection_name,
+            &vnc_host,
+            vnc_port,
+        )
+        .await?;
 
-        let create_response: CreateConnectionResponse = client
-            .post(format!(
-                "{}/session/data/{}/connections",
-                api_url, auth_response.data_source
-            ))
-            .header("Guacamole-Token", &auth_response.auth_token)
-            .json(&create_request)
-            .send()
-            .await?
-            .error_for_status()
-            .map_err(|e| GuacamoleError::ConnectionFailed(e.to_string()))?
-            .json()
-            .await?;
-
-        let client_url = format!("{}/#/client/{}", base_http_url, client_identifier);
+        let client_url = format!(
+            "{}/#/client/{}",
+            env_cfg.base_http_url, env_cfg.client_identifier
+        );
 
         Ok(Self {
             connection_name: connection_name.to_string(),
-            connection_key,
+            connection_key: env_cfg.connection_key,
             connection_id: create_response.identifier,
-            client_identifier,
-            api_url,
+            client_identifier: env_cfg.client_identifier,
+            api_url: env_cfg.api_url,
             client_url,
-            websocket_url,
-            tunnel_url,
+            websocket_url: env_cfg.websocket_url,
+            tunnel_url: env_cfg.tunnel_url,
             vnc_port,
         })
     }
@@ -195,85 +162,53 @@ impl GuacamoleConnection {
         vnc_host: &str,
         vnc_port: u16,
     ) -> Result<Self, GuacamoleError> {
-        let base_http_url = env.get("GUAC_URL").unwrap().trim().trim_end_matches('/');
-        let tunnel_path = env
-            .get("GUAC_TUNNEL_PATH")
-            .unwrap()
-            .trim()
-            .trim_matches('/');
-        let api_path = env.get("GUAC_API_PATH").unwrap().trim().trim_matches('/');
-        let connection_prefix = sanitize_identifier(env.get("GUAC_CONNECTION_PREFIX").unwrap());
-        let username = env.get("GUAC_ADMIN_USER").unwrap();
-        let password = env.get("GUAC_ADMIN_PASS").unwrap();
-
-        let connection_key = sanitize_identifier(connection_name);
-
-        let client_identifier = format!("{}-{}", connection_prefix, connection_key);
-        let api_url = format!("{}/{}", base_http_url, api_path);
-        let tunnel_url = format!("{}/{}", base_http_url, tunnel_path);
-        let websocket_url = compute_websocket_url(base_http_url, tunnel_path);
+        // Load env and build URL/identifier data
+        let env_cfg = Self::build_env_config(env, connection_name);
 
         let client = Client::new();
 
         // Authenticate with Guacamole
-        let auth_response: AuthResponse = client
-            .post(format!("{}/tokens", api_url))
-            .form(&[("username", username), ("password", password)])
-            .send()
-            .await?
-            .error_for_status()
-            .map_err(|_| GuacamoleError::AuthFailed)?
-            .json()
-            .await?;
+        let auth_response = Self::authenticate(
+            &client,
+            &env_cfg.api_url,
+            &env_cfg.username,
+            &env_cfg.password,
+        )
+        .await?;
 
         // Create VNC connection in Guacamole
-        let create_request = CreateConnectionRequest {
-            name: connection_name.to_string(),
-            parent_identifier: "ROOT".into(),
-            protocol: "vnc".into(),
-            parameters: ConnectionParameters {
-                hostname: vnc_host.to_string(),
-                port: vnc_port.to_string(),
-            },
-            attributes: ConnectionAttributes {
-                max_connections: "".to_string(),
-                max_connections_per_user: "".to_string(),
-            },
-        };
+        let create_response = Self::create_connection(
+            &client,
+            &env_cfg.api_url,
+            &auth_response,
+            connection_name,
+            vnc_host,
+            vnc_port,
+        )
+        .await?;
 
-        let create_response: CreateConnectionResponse = client
-            .post(format!(
-                "{}/session/data/{}/connections",
-                api_url, auth_response.data_source
-            ))
-            .header("Guacamole-Token", &auth_response.auth_token)
-            .json(&create_request)
-            .send()
-            .await?
-            .error_for_status()
-            .map_err(|e| GuacamoleError::ConnectionFailed(e.to_string()))?
-            .json()
-            .await?;
-
-        let client_url = format!("{}/#/client/{}", base_http_url, client_identifier);
+        let client_url = format!(
+            "{}/#/client/{}",
+            env_cfg.base_http_url, env_cfg.client_identifier
+        );
 
         Ok(Self {
             connection_name: connection_name.to_string(),
-            connection_key,
+            connection_key: env_cfg.connection_key,
             connection_id: create_response.identifier,
-            client_identifier,
-            api_url,
+            client_identifier: env_cfg.client_identifier,
+            api_url: env_cfg.api_url,
             client_url,
-            websocket_url,
-            tunnel_url,
+            websocket_url: env_cfg.websocket_url,
+            tunnel_url: env_cfg.tunnel_url,
             vnc_port,
         })
     }
 
     /// Delete this connection from Guacamole
     pub async fn delete(&self, env: &HashMap<String, String>) -> Result<(), GuacamoleError> {
-        let username = env.get("GUAC_ADMIN_USER").unwrap();
-        let password = env.get("GUAC_ADMIN_PASS").unwrap();
+        let username = env.get("GUAC_USER").unwrap();
+        let password = env.get("GUAC_PASS").unwrap();
 
         let client = Client::new();
 
@@ -315,6 +250,124 @@ impl GuacamoleConnection {
 
         Ok(())
     }
+
+    // Private helpers to reduce duplication between `new` and `from_vnc`.
+
+    fn build_env_config(env: &HashMap<String, String>, connection_name: &str) -> EnvConfig {
+        let base_http_url = env
+            .get("GUAC_URL")
+            .unwrap()
+            .trim()
+            .trim_end_matches('/')
+            .to_string();
+        let tunnel_path = env
+            .get("GUAC_TUNNEL_PATH")
+            .unwrap()
+            .trim()
+            .trim_matches('/')
+            .to_string();
+        let api_path = env
+            .get("GUAC_API_PATH")
+            .unwrap()
+            .trim()
+            .trim_matches('/')
+            .to_string();
+        let connection_prefix = sanitize_identifier(env.get("GUAC_CONNECTION_PREFIX").unwrap());
+        let username = env.get("GUAC_ADMIN_USER").unwrap().to_string();
+        let password = env.get("GUAC_ADMIN_PASS").unwrap().to_string();
+
+        let connection_key = sanitize_identifier(connection_name);
+        let client_identifier = format!("{}-{}", connection_prefix, connection_key);
+        let api_url = format!("{}/{}", base_http_url, api_path);
+        let tunnel_url = format!("{}/{}", base_http_url, tunnel_path);
+        let websocket_url = compute_websocket_url(&base_http_url, &tunnel_path);
+
+        EnvConfig {
+            base_http_url,
+            tunnel_path,
+            api_path,
+            connection_prefix,
+            username,
+            password,
+            connection_key,
+            client_identifier,
+            api_url,
+            tunnel_url,
+            websocket_url,
+        }
+    }
+
+    async fn authenticate(
+        client: &Client,
+        api_url: &str,
+        username: &str,
+        password: &str,
+    ) -> Result<AuthResponse, GuacamoleError> {
+        let auth_response: AuthResponse = client
+            .post(format!("{}/tokens", api_url))
+            .form(&[("username", username), ("password", password)])
+            .send()
+            .await?
+            .error_for_status()
+            .map_err(|_| GuacamoleError::AuthFailed)?
+            .json()
+            .await?;
+        Ok(auth_response)
+    }
+
+    async fn create_connection(
+        client: &Client,
+        api_url: &str,
+        auth_response: &AuthResponse,
+        connection_name: &str,
+        vnc_host: &str,
+        vnc_port: u16,
+    ) -> Result<CreateConnectionResponse, GuacamoleError> {
+        let create_request = CreateConnectionRequest {
+            name: connection_name.to_string(),
+            parent_identifier: "ROOT".into(),
+            protocol: "vnc".into(),
+            parameters: ConnectionParameters {
+                hostname: vnc_host.to_string(),
+                port: vnc_port.to_string(),
+            },
+            attributes: ConnectionAttributes {
+                max_connections: "".to_string(),
+                max_connections_per_user: "".to_string(),
+            },
+        };
+
+        let create_response: CreateConnectionResponse = client
+            .post(format!(
+                "{}/session/data/{}/connections",
+                api_url, auth_response.data_source
+            ))
+            .header("Guacamole-Token", &auth_response.auth_token)
+            .json(&create_request)
+            .send()
+            .await?
+            .error_for_status()
+            .map_err(|e| GuacamoleError::ConnectionFailed(e.to_string()))?
+            .json()
+            .await?;
+
+        Ok(create_response)
+    }
+}
+
+/// Small struct returned by `build_env_config` to carry computed values.
+struct EnvConfig {
+    base_http_url: String,
+    tunnel_path: String,
+    api_path: String,
+    connection_prefix: String,
+    username: String,
+    password: String,
+    connection_key: String,
+    client_identifier: String,
+    api_url: String,
+    tunnel_url: String,
+    websocket_url: String,
 }
 
 fn compute_websocket_url(base_http_url: &str, tunnel_path: &str) -> String {
