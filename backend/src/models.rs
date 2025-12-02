@@ -73,7 +73,7 @@ pub struct Node {
     /// This captures all changes made while the VM is running
     pub instance_overlay_path: String,
     /// VNC port if VNC is enabled
-    pub vnc_port: Option<i32>,
+    pub vnc_port: Option<u16>,
     /// Guacamole connection ID if connected
     pub guacamole_connection_id: Option<String>,
 }
