@@ -40,6 +40,8 @@ services:
       - .env
     ports:
       - "${GUAC_PORT:-8080}:8080"
+    networks:
+      - guac_network
 
 volumes:
   postgres_data:
