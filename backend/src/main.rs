@@ -1,8 +1,10 @@
+mod guacamole;
 mod models;
 mod routes;
 
 use std::{collections::HashMap, env, sync::Arc};
 
+use guacamole::GuacamoleBootstrap;
 use sqlx::migrate::Migrator;
 use thiserror::Error;
 use tracing::{debug, error, info, instrument, trace};
@@ -26,7 +28,22 @@ const ENV_FILES: [(&str, &[&str]); 4] = [
     ),
     (".env.qemu", &["IMAGE_DIR", "OVERLAY_DIR"]),
     (".env", &["BACKEND_HOST", "BACKEND_PORT"]),
+    (
+        ".env.guacamole",
+        &[
+            "GUAC_DB",
+            "GUAC_DB_USER",
+            "GUAC_DB_PASSWORD",
+            "GUAC_HTTPS",
+            "GUAC_HOST",
+            "GUAC_PORT",
+            "GUAC_TUNNEL_PATH",
+            "GUAC_API_PATH",
+            "GUAC_CONNECTION_PREFIX",
+        ],
+    ),
 ];
+
 #[derive(Debug, Error)]
 enum SetupError {
     #[error("Failed to load environment file {0}: {1}")]
@@ -121,7 +138,41 @@ async fn main() {
     );
     env.insert("DATABASE_URL".into(), database_url.clone());
 
+    let guacamole_database_url = build_postgres_url(
+        env.get("GUAC_DB_USER").unwrap(),
+        env.get("GUAC_DB_PASSWORD").unwrap(),
+        env.get("POSTGRES_HOST").unwrap(),
+        env.get("POSTGRES_PORT").unwrap(),
+        env.get("GUAC_DB").unwrap(),
+    );
+
+    env.insert("GUAC_DATABASE_URL".into(), guacamole_database_url);
+    env.insert(
+        "GUAC_URL".into(),
+        format!(
+            "http{}://{}:{}/",
+            if env.get("GUAC_HTTPS").unwrap() == "1" {
+                "s"
+            } else {
+                ""
+            },
+            env.get("GUAC_HOST").unwrap(),
+            env.get("GUAC_PORT").unwrap(),
+        ),
+    );
+
     debug!("Loaded environment variables.");
+
+    if let Err(err) = GuacamoleBootstrap::from_env(&env) {
+        error!("Failed to configure Guacamole UI: {}", err);
+        return;
+    }
+
+    info!(
+        "Configured Guacamole database {} with user {} using shared Postgres instance.",
+        env.get("GUAC_DB").unwrap(),
+        env.get("GUAC_DB_USER").unwrap()
+    );
 
     debug!(
         "Connecting to the database at {}:{}",
