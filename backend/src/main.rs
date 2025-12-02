@@ -5,7 +5,7 @@ use std::{collections::HashMap, env, sync::Arc};
 
 use sqlx::migrate::Migrator;
 use thiserror::Error;
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, info, instrument, trace};
 use tracing_subscriber::filter::LevelFilter;
 
 use models::AppState;
@@ -13,6 +13,20 @@ use routes::create_router;
 
 static MIGRATOR: Migrator = sqlx::migrate!();
 
+const ENV_FILES: [(&str, &[&str]); 4] = [
+    (
+        ".env.database",
+        &[
+            "POSTGRES_USER",
+            "POSTGRES_PASSWORD",
+            "POSTGRES_DB",
+            "POSTGRES_PORT",
+            "POSTGRES_HOST",
+        ],
+    ),
+    (".env.qemu", &["IMAGE_DIR", "OVERLAY_DIR"]),
+    (".env", &["BACKEND_HOST", "BACKEND_PORT"]),
+];
 #[derive(Debug, Error)]
 enum SetupError {
     #[error("Failed to load environment file {0}: {1}")]
@@ -32,14 +46,9 @@ fn load_env(file: &str, variables: &[&str]) -> Result<HashMap<String, String>, S
     }
 
     for &var in variables {
-        variables_map.insert(
-            var.into(),
-            match env::var(var) {
-                Ok(value) => value,
-                Err(_) => return Err(SetupError::EnvVarNotFound(var.into())),
-            },
-        );
-        debug!("Loaded environment variable {}", &var);
+        let value = env::var(var).map_err(|_| SetupError::EnvVarNotFound(var.into()))?;
+        trace!("Loaded environment variable {}", &var);
+        variables_map.insert(var.into(), value);
     }
 
     Ok(variables_map)
@@ -53,6 +62,19 @@ fn load_envs(envs: &[(&str, &[&str])]) -> Result<HashMap<String, String>, SetupE
     Ok(result)
 }
 
+fn build_postgres_url(
+    user: &str,
+    password: &str,
+    host: &str,
+    port: &str,
+    database: &str,
+) -> String {
+    format!(
+        "postgres://{}:{}@{}:{}/{}",
+        user, password, host, port, database
+    )
+}
+
 fn parse_log_level(args: &mut env::Args) -> LevelFilter {
     while let Some(arg) = args.next() {
         if arg == "--log-level" {
@@ -61,6 +83,7 @@ fn parse_log_level(args: &mut env::Args) -> LevelFilter {
                     "debug" => LevelFilter::DEBUG,
                     "info" => LevelFilter::INFO,
                     "warn" | "warning" => LevelFilter::WARN,
+                    "trace" => LevelFilter::TRACE,
                     "error" => LevelFilter::ERROR,
                     _ => LevelFilter::INFO,
                 }
@@ -81,20 +104,7 @@ async fn main() {
 
     debug!("Loading environment variables.");
 
-    let env = match load_envs(&[
-        (
-            ".env.database",
-            &[
-                "POSTGRES_USER",
-                "POSTGRES_PASSWORD",
-                "POSTGRES_DB",
-                "POSTGRES_PORT",
-                "POSTGRES_HOST",
-            ],
-        ),
-        (".env.qemu", &["IMAGE_DIR", "OVERLAY_DIR"]),
-        (".env", &["BACKEND_HOST", "BACKEND_PORT"]),
-    ]) {
+    let mut env = match load_envs(&ENV_FILES) {
         Ok(env) => env,
         Err(e) => {
             error!("{e}");
@@ -102,16 +112,16 @@ async fn main() {
         }
     };
 
-    debug!("Loaded environment variables.");
-
-    let database_url = format!(
-        "postgres://{}:{}@{}:{}/{}",
+    let database_url = build_postgres_url(
         env.get("POSTGRES_USER").unwrap(),
         env.get("POSTGRES_PASSWORD").unwrap(),
         env.get("POSTGRES_HOST").unwrap(),
         env.get("POSTGRES_PORT").unwrap(),
-        env.get("POSTGRES_DB").unwrap()
+        env.get("POSTGRES_DB").unwrap(),
     );
+    env.insert("DATABASE_URL".into(), database_url.clone());
+
+    debug!("Loaded environment variables.");
 
     debug!(
         "Connecting to the database at {}:{}",
