@@ -6,12 +6,15 @@
       libpq
     ];
 in
-  pkgs.mkShell rec {
+  pkgs.mkShell {
     nativeBuildInputs = [ pkgs.pkg-config ];
     buildInputs = with pkgs; [
       clang
       llvmPackages_latest.bintools
       rustup
+
+      pkg-config
+      openssl
 
       nodejs_22
       pnpm
@@ -25,6 +28,7 @@ in
     shellHook = ''
       export PATH=$PATH:''${CARGO_HOME:-~/.cargo}/bin
       export PATH=$PATH:''${RUSTUP_HOME:-~/.rustup}/toolchains/$RUSTC_VERSION-x86_64-unknown-linux-gnu/bin/
+      export PKG_CONFIG_PATH="${pkgs.openssl.dev}/lib/pkgconfig";
       '';
 
     # Add precompiled library to rustc search path
