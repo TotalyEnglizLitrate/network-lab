@@ -28,5 +28,4 @@ Build a minimal prototype to create/manage virtual nodes in a network lab, using
 - Node lifecycle works (Run / Stop / Wipe)
 - Uses QEMU overlays efficiently
 - Guacamole console works on click
-- Clear code + README
 - Bonus: Multiple nodes running concurrently
