@@ -1,10 +1,10 @@
 mod guacamole;
 mod models;
+mod qemu;
 mod routes;
 
 use std::{collections::HashMap, env, sync::Arc};
 
-use guacamole::GuacamoleBootstrap;
 use sqlx::migrate::Migrator;
 use thiserror::Error;
 use tracing::{debug, error, info, instrument, trace};
@@ -15,68 +15,70 @@ use routes::create_router;
 
 static MIGRATOR: Migrator = sqlx::migrate!();
 
-const ENV_FILES: [(&str, &[&str]); 4] = [
-    (
-        ".env.database",
-        &[
-            "POSTGRES_USER",
-            "POSTGRES_PASSWORD",
-            "POSTGRES_DB",
-            "POSTGRES_PORT",
-            "POSTGRES_HOST",
-        ],
-    ),
-    (".env.qemu", &["IMAGE_DIR", "OVERLAY_DIR"]),
-    (".env", &["BACKEND_HOST", "BACKEND_PORT"]),
-    (
-        ".env.guacamole",
-        &[
-            "GUAC_DB",
-            "GUAC_DB_USER",
-            "GUAC_DB_PASSWORD",
-            "GUAC_HTTPS",
-            "GUAC_HOST",
-            "GUAC_PORT",
-            "GUAC_TUNNEL_PATH",
-            "GUAC_API_PATH",
-            "GUAC_CONNECTION_PREFIX",
-        ],
-    ),
+const ENV_SPECS: &'static [&'static str; 17] = &[
+    "POSTGRES_USER",
+    "POSTGRES_PASSWORD",
+    "POSTGRES_HOST",
+    "POSTGRES_PORT",
+    "IMAGE_DIR",
+    "OVERLAY_DIR",
+    "BACKEND_DB",
+    "BACKEND_HOST",
+    "BACKEND_PORT",
+    "GUAC_HTTPS",
+    "GUAC_HOST",
+    "GUAC_PORT",
+    "GUAC_TUNNEL_PATH",
+    "GUAC_API_PATH",
+    "GUAC_CONNECTION_PREFIX",
+    "GUAC_USER",
+    "GUAC_PASS",
 ];
 
 #[derive(Debug, Error)]
 enum SetupError {
-    #[error("Failed to load environment file {0}: {1}")]
-    EnvLoadError(String, String),
+    #[error("Failed to load environment file {file}: {source}")]
+    EnvLoadError { file: String, source: dotenv::Error },
 
-    #[error("Expected variable not found in environment file: {0}")]
+    #[error("Expected variable `{0}` not found")]
     EnvVarNotFound(String),
 }
 
-fn load_env(file: &str, variables: &[&str]) -> Result<HashMap<String, String>, SetupError> {
-    let mut variables_map = HashMap::new();
-
-    debug!("Loading environment variables from file: {}", file);
-    match dotenv::from_filename(file) {
-        Ok(_) => debug!("Successfully loaded environment file: {}", file),
-        Err(e) => return Err(SetupError::EnvLoadError(file.into(), e.to_string())),
+fn read_env(name: &str) -> Option<String> {
+    match env::var(name) {
+        Ok(value) => {
+            let trimmed = value.trim().to_owned();
+            if trimmed.is_empty() {
+                None
+            } else {
+                trace!("Loaded environment variable: {trimmed}");
+                Some(trimmed)
+            }
+        }
+        Err(_) => None,
     }
-
-    for &var in variables {
-        let value = env::var(var).map_err(|_| SetupError::EnvVarNotFound(var.into()))?;
-        trace!("Loaded environment variable {}", &var);
-        variables_map.insert(var.into(), value);
-    }
-
-    Ok(variables_map)
 }
 
-fn load_envs(envs: &[(&str, &[&str])]) -> Result<HashMap<String, String>, SetupError> {
-    let mut result = HashMap::new();
-    for (file, variables) in envs {
-        result.extend(load_env(file, variables)?);
+fn load_env(
+    file: &str,
+    specs: &'static [&'static str],
+) -> Result<HashMap<String, String>, SetupError> {
+    debug!("Loading environment variables from file: {}", file);
+    dotenv::from_filename(file).map_err(|err| SetupError::EnvLoadError {
+        file: file.into(),
+        source: err,
+    })?;
+
+    let mut variables = HashMap::new();
+    for spec in specs {
+        if let Some(val) = read_env(spec) {
+            variables.insert(spec.to_string(), val);
+        } else {
+            Err(SetupError::EnvVarNotFound(spec.to_string()))?;
+        }
     }
-    Ok(result)
+
+    Ok(variables)
 }
 
 fn build_postgres_url(
@@ -119,12 +121,10 @@ async fn main() {
     let log_level = parse_log_level(&mut env::args());
     tracing_subscriber::fmt().with_max_level(log_level).init();
 
-    debug!("Loading environment variables.");
-
-    let mut env = match load_envs(&ENV_FILES) {
+    let mut env = match load_env(".env", ENV_SPECS) {
         Ok(env) => env,
-        Err(e) => {
-            error!("{e}");
+        Err(err) => {
+            error!("{err}");
             return;
         }
     };
@@ -134,23 +134,14 @@ async fn main() {
         env.get("POSTGRES_PASSWORD").unwrap(),
         env.get("POSTGRES_HOST").unwrap(),
         env.get("POSTGRES_PORT").unwrap(),
-        env.get("POSTGRES_DB").unwrap(),
+        env.get("BACKEND_DB").unwrap(),
     );
     env.insert("DATABASE_URL".into(), database_url.clone());
 
-    let guacamole_database_url = build_postgres_url(
-        env.get("GUAC_DB_USER").unwrap(),
-        env.get("GUAC_DB_PASSWORD").unwrap(),
-        env.get("POSTGRES_HOST").unwrap(),
-        env.get("POSTGRES_PORT").unwrap(),
-        env.get("GUAC_DB").unwrap(),
-    );
-
-    env.insert("GUAC_DATABASE_URL".into(), guacamole_database_url);
     env.insert(
         "GUAC_URL".into(),
         format!(
-            "http{}://{}:{}/",
+            "http{}://{}:{}/guacamole/",
             if env.get("GUAC_HTTPS").unwrap() == "1" {
                 "s"
             } else {
@@ -162,17 +153,6 @@ async fn main() {
     );
 
     debug!("Loaded environment variables.");
-
-    if let Err(err) = GuacamoleBootstrap::from_env(&env) {
-        error!("Failed to validate Guacamole configuration: {}", err);
-        return;
-    }
-
-    info!(
-        "Configured Guacamole database {} with user {} using shared Postgres instance.",
-        env.get("GUAC_DB").unwrap(),
-        env.get("GUAC_DB_USER").unwrap()
-    );
 
     debug!(
         "Connecting to the database at {}:{}",
@@ -200,7 +180,7 @@ async fn main() {
         return;
     }
 
-    info!("Migrations applied successfully.");
+    debug!("Migrations applied successfully.");
     info!("Database setup complete.");
 
     let address = format!(
