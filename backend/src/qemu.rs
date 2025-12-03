@@ -46,7 +46,7 @@ pub enum QemuError {
 #[derive(Debug, Clone)]
 pub struct QemuConfig {
     /// Memory size in MB
-    pub memory_mb: u32,
+    pub memory_mb: u64,
     /// Number of CPU cores
     pub cpu_cores: u32,
     /// Enable KVM acceleration

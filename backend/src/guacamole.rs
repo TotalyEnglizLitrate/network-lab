@@ -92,7 +92,6 @@ impl GuacamoleConnection {
         instance: &mut QemuInstance,
         vnc_display: Option<u16>,
     ) -> Result<Self, GuacamoleError> {
-        // Enable VNC on the QEMU instance if not already enabled
         if instance.vnc_port.is_none() {
             let display = vnc_display.unwrap_or(0);
             qemu::enable_vnc(instance, display).await?;
@@ -236,21 +235,6 @@ impl GuacamoleConnection {
         Ok(())
     }
 
-    /// Delete this connection from Guacamole and disable VNC on the QEMU instance
-    pub async fn delete_with_vnc_disable(
-        &self,
-        env: &HashMap<String, String>,
-        instance: &mut QemuInstance,
-    ) -> Result<(), GuacamoleError> {
-        // First delete the Guacamole connection
-        self.delete(env).await?;
-
-        // Then disable VNC on the QEMU instance
-        qemu::disable_vnc(instance).await?;
-
-        Ok(())
-    }
-
     // Private helpers to reduce duplication between `new` and `from_vnc`.
 
     fn build_env_config(env: &HashMap<String, String>, connection_name: &str) -> EnvConfig {
@@ -260,6 +244,8 @@ impl GuacamoleConnection {
             .trim()
             .trim_end_matches('/')
             .to_string();
+
+        // local-only values used to compute URLs; not kept on the returned struct
         let tunnel_path = env
             .get("GUAC_TUNNEL_PATH")
             .unwrap()
@@ -272,9 +258,11 @@ impl GuacamoleConnection {
             .trim()
             .trim_matches('/')
             .to_string();
+
+        // prefix is only used to derive the client identifier
         let connection_prefix = sanitize_identifier(env.get("GUAC_CONNECTION_PREFIX").unwrap());
-        let username = env.get("GUAC_ADMIN_USER").unwrap().to_string();
-        let password = env.get("GUAC_ADMIN_PASS").unwrap().to_string();
+        let username = env.get("GUAC_USER").unwrap().to_string();
+        let password = env.get("GUAC_PASS").unwrap().to_string();
 
         let connection_key = sanitize_identifier(connection_name);
         let client_identifier = format!("{}-{}", connection_prefix, connection_key);
@@ -284,9 +272,6 @@ impl GuacamoleConnection {
 
         EnvConfig {
             base_http_url,
-            tunnel_path,
-            api_path,
-            connection_prefix,
             username,
             password,
             connection_key,
@@ -358,9 +343,6 @@ impl GuacamoleConnection {
 /// Small struct returned by `build_env_config` to carry computed values.
 struct EnvConfig {
     base_http_url: String,
-    tunnel_path: String,
-    api_path: String,
-    connection_prefix: String,
     username: String,
     password: String,
     connection_key: String,
